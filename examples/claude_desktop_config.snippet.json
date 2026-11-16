@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "mathmagic-mcp-pro": {
+      "command": "C:\\PATH\\TO\\mathmagic-mcp-pro\\.venv\\Scripts\\python.exe",
+      "args": ["-u", "C:\\PATH\\TO\\mathmagic-mcp-pro\\server.py"],
+      "env": {
+        "MATHMAGIC_EXE": "C:\\Program Files (x86)\\MathMagic Pro Edition\\MathMagic Pro 9.31 InD.exe",
+        "INDESIGN_PROGID": "InDesign.Application",
+        "MATHMAGIC_NEW_ACTION": "New Equation",
+        "MATHMAGIC_EDIT_ACTION": "Edit Equation"
+      }
+    }
+  }
+}
