@@ -5,7 +5,22 @@
 **Claude Desktop + Adobe InDesign 2026 + MathMagic Pro 9.31** için yerel MCP sunucusu.
 Mevcut InDesign MCP'nizi **değiştirmez**; yanında ayrı bir araç seti olarak çalışır.
 
-> **Önemli:** Bu bir *doğrulanmış MathMagic API entegrasyonu* değildir. MathMagic'in belgelenmiş bir Windows otomasyon API'si bulunamadı. InDesign menü eylemi Windows COM/ExtendScript ile çağrılır; dış MathMagic editörü daha hızlı, hedefli bir `pywinauto`/klavye adaptörüyle kontrol edilmeye *çalışılır*. Gerçek InDesign 2026 + MathMagic 9.31 ortamında henüz uçtan uca test edilmemiştir. Formülün başarıyla işlendiği **otomatik olarak varsayılmaz**.
+## v0.3 — Pro mesaj adaptörü (önerilen giriş noktası: `server_pro.py`)
+
+v0.3, v0.1'in klavye/pano adaptörünün yerine **Windows pencere mesajları** kullanır (`WM_CHAR`, `WM_COMMAND`, `WM_SETTEXT`). Fare, klavye, pano, `SetFocus`/`SetForegroundWindow` kullanmaz. Lisans penceresine dokunmaz.
+
+Gerçek bir Windows 11 + InDesign 2026 + MathMagic Pro 9.31 (deneme modu) ortamında canlı test edildi:
+
+- **`offline` (varsayılan):** MathMagic EPS üretir, InDesign işaretçiye `place()` ile yerleştirir, belgeye gömer ve eklentinin *Default Baseline* ayarını uygular. Ölçülen hız ~1,2–1,8 sn/formül. Testlerde kullanıcının öndeki uygulamasını öne çekmedi.
+- **`plugin`:** Eklentinin New/Edit Equation eylemi → bağlı MathMagic penceresi (mesajla) → *Update* (32880). Ölçülen hız ~2–3,5 sn/formül. Eklentinin kendisi her formülde pencereleri öne getirir.
+- **Araçlar:** 19 araç; değişiklik yapanların hepsi `confirm=true` ister. Toplu iş zaman bütçeli çalışır ve `next_index` ile kaldığı yerden devam eder (2000 formüle kadar). Her sonuçta doğrulama ve ön plan (odak) raporu döner.
+- **Bilinen sınırlar:**
+  - Deneme modunda her açılışta lisans penceresi çıkar ve bazı EPS çıktılarında "Demo" filigranı olur.
+  - Stil setindeki eksik yazı tipi uyarısı otomatik onaylanır, ama stil setinin düzeltilmesi gerekir.
+
+Ayrıntılar: [`docs/PRO_V03_TR.md`](docs/PRO_V03_TR.md). Claude kaydı: `command` = `.venv\Scripts\python.exe`, `args` = `["-u", "<proje>\\server_pro.py"]`, `env.MATHMAGIC_DEFAULT_MODE` = `offline`.
+
+> **Önemli (v0.1/v0.2 için geçerli not):** Bu bir *doğrulanmış MathMagic API entegrasyonu* değildir. MathMagic'in belgelenmiş bir Windows otomasyon API'si bulunamadı. InDesign menü eylemi Windows COM/ExtendScript ile çağrılır; dış MathMagic editörü daha hızlı, hedefli bir `pywinauto`/klavye adaptörüyle kontrol edilmeye *çalışılır*. Gerçek InDesign 2026 + MathMagic 9.31 ortamında henüz uçtan uca test edilmemiştir. Formülün başarıyla işlendiği **otomatik olarak varsayılmaz**.
 
 ## Mimari
 
