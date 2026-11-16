@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mathmagic-mcp-pro"
+version = "0.1.0"
+description = "Claude Desktop MCP bridge for MathMagic Pro 9.31 and Adobe InDesign 2026"
+requires-python = ">=3.10"
+dependencies = []
+classifiers = ["Operating System :: Microsoft :: Windows", "Programming Language :: Python :: 3"]
+
+[project.optional-dependencies]
+windows = ["pywin32>=306,<400", "pywinauto>=0.6.9,<0.7"]
+test = ["pytest>=8,<10"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
