@@ -4,11 +4,14 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mathmagic-mcp-pro"
-version = "0.1.0"
-description = "Claude Desktop MCP bridge for MathMagic Pro 9.31 and Adobe InDesign 2026"
+version = "0.4.1"
+description = "MCP server that places native, editable MathMagic Pro 9.31 equations into Adobe InDesign 2026 in the background (window messages + InDesign COM; no keyboard, mouse or clipboard)"
 requires-python = ">=3.10"
 dependencies = []
 classifiers = ["Operating System :: Microsoft :: Windows", "Programming Language :: Python :: 3"]
+
+[project.urls]
+Repository = "https://github.com/mrtersn9-cpu/mathmagic-mcp-pro"
 
 [project.optional-dependencies]
 windows = ["pywin32>=306,<400", "pywinauto>=0.6.9,<0.7"]

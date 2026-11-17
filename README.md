@@ -4,6 +4,9 @@
 
 Bu MCP sunucusu, **Claude** (Claude Code / Claude Desktop) ile **Adobe InDesign 2026** ve **MathMagic Pro 9.31 InD** arasında çalışır. InDesign metin çerçevelerine **yerel, düzenlenebilir, gömülü MathMagic formülleri** yerleştirir. Bu iş arka planda yürür; siz başka programlarda çalışmaya devam edebilirsiniz. Mevcut InDesign MCP'nizi değiştirmez, onun yanında ayrı bir araç seti olarak çalışır.
 
+> **Depo:** https://github.com/mrtersn9-cpu/mathmagic-mcp-pro
+> Proje önceden `e-icerik_editor` deposunun `tools/mathmagic-mcp-pro` klasöründeydi. 17.11.2026'da commit geçmişi korunarak bu bağımsız depoya taşındı.
+
 ## Temel ilkeler
 
 - **Yalnız pencere mesajları ve InDesign COM kullanılır.**
@@ -80,8 +83,12 @@ Manifest biçimi: `{"equations":[{"id":"Q0001-M1","marker":"[[MM:Q0001-M1]]","la
 Gerekenler: Windows 10/11, Python 3.10+, `pywin32`, Adobe InDesign 2026, MathMagic Pro 9.31 InD ve InDesign `Plug-Ins\MathMagic CC2026-64bit` eklentisi.
 
 ```powershell
+git clone https://github.com/mrtersn9-cpu/mathmagic-mcp-pro.git C:\Users\<kullanıcı>\mcp-servers\mathmagic-mcp-pro
+cd C:\Users\<kullanıcı>\mcp-servers\mathmagic-mcp-pro
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements-windows.txt
+.\.venv\Scripts\pip install pytest
+.\.venv\Scripts\python -m pytest -q tests     # 82 test
 ```
 
 `mathmagic-mcp-pro.json` dosyası (yolları kendi klasörünüze göre düzeltin):

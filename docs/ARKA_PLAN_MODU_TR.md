@@ -11,7 +11,7 @@ Bu sürüm MathMagic'e klavye veya fare komutları **göndermez**. v0.1 sürüm�
 
 ## Kurulum
 
-1. v0.2 dalındaki yeni dosyaları önceki `tools/mathmagic-mcp-pro/` proje dizinine **aynı klasör yapısıyla** ekleyin.
+1. Depoyu klonlayın (`git clone https://github.com/mrtersn9-cpu/mathmagic-mcp-pro.git`). Proje eskiden `e-icerik_editor/tools/mathmagic-mcp-pro/` klasöründeydi.
 2. Windows PowerShell'de bu dizine geçin.
 3. `powershell -ExecutionPolicy Bypass -File .\install_background.ps1` komutunu çalıştırın.
 4. Claude Desktop'ı tamamen kapatıp yeniden açın.
