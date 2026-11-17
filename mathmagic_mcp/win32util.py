@@ -59,6 +59,7 @@ if IS_WINDOWS:
     _GetDlgCtrlID = _sig(_u32, "GetDlgCtrlID", ctypes.c_int, wintypes.HWND)
     _FindWindowExW = _sig(_u32, "FindWindowExW", wintypes.HWND, wintypes.HWND, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR)
     _GetForegroundWindow = _sig(_u32, "GetForegroundWindow", wintypes.HWND)
+    _GetAsyncKeyState = _sig(_u32, "GetAsyncKeyState", ctypes.c_short, ctypes.c_int)  # read-only key state
     _PostMessageW = _sig(_u32, "PostMessageW", wintypes.BOOL, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
     _SendMessageW = _sig(_u32, "SendMessageW", ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM)
     _SendMessageTimeoutW = _sig(_u32, "SendMessageTimeoutW", ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
@@ -80,7 +81,6 @@ if IS_WINDOWS:
                                        wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD))
     _ShellExecuteW = _sig(_sh32, "ShellExecuteW", wintypes.HINSTANCE, wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
                           wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int)
-
     class PROCESSENTRY32W(ctypes.Structure):
         _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
                     ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD), ("cntThreads", wintypes.DWORD),
@@ -239,11 +239,61 @@ def combo_items(hwnd: int, limit: int = 60) -> list[str]:
     return items
 
 
+def menu_items(hwnd: int, max_depth: int = 4) -> list[tuple[str, int, bool]]:
+    """Read-only: flatten the window's menu bar into (path, command id, disabled)."""
+    getmenu = _sig(_u32, "GetMenu", wintypes.HMENU, wintypes.HWND)
+    getsub = _sig(_u32, "GetSubMenu", wintypes.HMENU, wintypes.HMENU, ctypes.c_int)
+    count = _sig(_u32, "GetMenuItemCount", ctypes.c_int, wintypes.HMENU)
+    getid = _sig(_u32, "GetMenuItemID", wintypes.UINT, wintypes.HMENU, ctypes.c_int)
+    getstr = _sig(_u32, "GetMenuStringW", ctypes.c_int, wintypes.HMENU, wintypes.UINT, wintypes.LPWSTR, ctypes.c_int, wintypes.UINT)
+    state = _sig(_u32, "GetMenuState", wintypes.UINT, wintypes.HMENU, wintypes.UINT, wintypes.UINT)
+    out: list[tuple[str, int, bool]] = []
+
+    def walk(menu, prefix: str, depth: int) -> None:
+        for i in range(max(count(menu), 0)):
+            buf = ctypes.create_unicode_buffer(256); getstr(menu, i, buf, 256, 0x400)
+            label = buf.value.replace("&", "").strip()
+            sub = getsub(menu, i)
+            if not label and not sub:
+                continue
+            path = f"{prefix} > {label}" if prefix else label
+            if sub:
+                if depth < max_depth:
+                    walk(sub, path, depth + 1)
+            else:
+                cid = int(getid(menu, i))
+                if cid and cid != 0xFFFFFFFF:
+                    out.append((path, cid, bool(state(menu, i, 0x400) & 0x3)))
+    root = getmenu(hwnd)
+    if root:
+        walk(root, "", 0)
+    return out
+
+
+def utf16_units(value: str) -> tuple[int, ...]:
+    data = value.encode("utf-16-le")
+    return struct.unpack("<%dH" % (len(data) // 2), data)
+
+
+def post_chars(hwnd: int, value: str) -> bool:
+    """Queue characters with PostMessage(WM_CHAR) in one burst (FIFO with later posted commands)."""
+    return all(post(hwnd, WM_CHAR, unit, 1) for unit in utf16_units(value))
+
+
+def listbox_items(hwnd: int, limit: int = 500) -> list[str]:
+    count = max(0, min(int(_SendMessageW(hwnd, 0x018B, 0, 0)), limit))  # LB_GETCOUNT
+    items = []
+    for i in range(count):
+        length = int(_SendMessageW(hwnd, 0x018A, i, 0))  # LB_GETTEXTLEN
+        buf = ctypes.create_unicode_buffer(max(length, 0) + 2)
+        _SendMessageW(hwnd, 0x0189, i, ctypes.cast(buf, ctypes.c_void_p).value)  # LB_GETTEXT
+        items.append(buf.value)
+    return items
+
+
 def type_chars(hwnd: int, value: str, timeout_ms: int = 3000) -> bool:
     """Deliver characters synchronously with WM_CHAR (UTF-16 code units). No keyboard input."""
-    data = value.encode("utf-16-le")
-    units = struct.unpack("<%dH" % (len(data) // 2), data)
-    return all(send_timeout(hwnd, WM_CHAR, unit, 1, timeout_ms) for unit in units)
+    return all(send_timeout(hwnd, WM_CHAR, unit, 1, timeout_ms) for unit in utf16_units(value))
 
 
 def shell_open_no_activate(path: str, args: str | None = None) -> int:
@@ -288,6 +338,27 @@ def write_png(path: str, width: int, height: int, bgra: bytes) -> None:
         stream.write(png)
 
 
+MODIFIER_KEYS = {"shift": 0x10, "ctrl": 0x11, "alt": 0x12, "lwin": 0x5B, "rwin": 0x5C}
+
+
+def modifiers_down() -> list[str]:
+    """Modifier keys the USER is physically holding (read-only GetAsyncKeyState; nothing is sent).
+    Live E2E 2026-11-17: while the user held Alt for Alt+Tab, characters posted to MathMagic were swallowed and the
+    equation came out empty, so typing waits until modifiers are released."""
+    if not IS_WINDOWS:
+        return []
+    return [name for name, vk in MODIFIER_KEYS.items() if _GetAsyncKeyState(vk) & 0x8000]
+
+
+def wait_modifiers_released(timeout: float = 5.0, poll: float = 0.05) -> dict:
+    t0 = time.monotonic(); held = modifiers_down(); seen = list(held)
+    while held and time.monotonic() - t0 < timeout:
+        time.sleep(poll)
+        held = modifiers_down()
+        seen += [k for k in held if k not in seen]
+    return {"waited_s": round(time.monotonic() - t0, 3), "held": seen, "released": not held}
+
+
 class FocusRecorder:
     """Samples the foreground window during an operation (read-only evidence)."""
 
@@ -312,8 +383,12 @@ class FocusRecorder:
         start_exe = (self.start.get("exe") or "").lower()
         user_app = bool(start_exe) and not start_exe.startswith(self.AUTOMATED_APPS)
         process_changed = any((c.get("exe") or "").lower() != start_exe for c in changes)
+        # Only MathMagic/InDesign coming to the front counts as taken focus; the user switching between their own
+        # apps (Alt+Tab to Chrome, Claude...) during the operation is reported separately (live E2E false positive).
+        automated_front = any((c.get("exe") or "").lower().startswith(self.AUTOMATED_APPS) for c in changes)
         return {"foreground_start": f"{self.start.get('exe')} | {self.start.get('title')}",
                 "foreground_changes": [f"{c['t']}s {c.get('exe')} | {c.get('title')}" for c in changes],
                 "foreground_changed": bool(changes),
                 "foreground_process_changed": process_changed,
-                "took_focus_from_user": user_app and process_changed}
+                "user_switched_apps": process_changed and not automated_front,
+                "took_focus_from_user": user_app and automated_front}

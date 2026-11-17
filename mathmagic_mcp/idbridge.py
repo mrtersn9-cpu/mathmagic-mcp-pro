@@ -1,7 +1,12 @@
-"""InDesign COM bridge for v0.3 (never launches InDesign; fixed JSX only).
+"""InDesign COM bridge (never launches InDesign; fixed JSX only).
 
 All ExtendScript is generated here from validated parameters; MCP clients cannot
-inject code. Results are returned as JSON produced by a tiny ES3 serializer.
+inject code. Results are JSON produced by a tiny ES3 serializer.
+
+Synchronisation features (v0.4):
+- every mutating script runs as ONE undo step (app.doScript + UndoModes.ENTIRE_SCRIPT)
+- equation frames carry script labels (mm.id, mm.latex, mm.sha, mm.style, mm.tool), so equations
+  stay identifiable after markers are removed and can be listed, verified, re-rendered or restyled
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ JAVASCRIPT = 1246973031
 INDESIGN_EXE = "InDesign.exe"
 ACTION_IDS = {"New Equation": 512512, "Edit Equation": 512513, "Shift Baseline...": 512515,
               "Default Baseline": 512525, "Convert to Equation": 512534}
+LABEL_KEYS = ("id", "latex", "sha", "style", "tool")
 
 
 class InDesignError(RuntimeError):
@@ -44,11 +50,39 @@ function __findMarker(doc,marker){app.findTextPreferences=NothingEnum.nothing;ap
  finally{app.findTextPreferences=NothingEnum.nothing;app.changeTextPreferences=NothingEnum.nothing;}}
 function __eqBefore(ch){try{if(ch.contents!=="\uFFFC")return null;var it=ch.allPageItems;if(!it.length)return null;
  var fr=it[0];var g=fr.allGraphics.length?fr.allGraphics[0]:null;if(!g)return null;return {frame:fr,graphic:g};}catch(e){return null;}}
+var __KEYS=["id","latex","sha","style","tool"];
+function __labels(fr){var o={};for(var i=0;i<__KEYS.length;i++){var v="";try{v=fr.extractLabel("mm."+__KEYS[i]);}catch(e){}if(v)o[__KEYS[i]]=v;}return o;}
+function __setLabels(fr,o){for(var k in o){if(o.hasOwnProperty(k)&&o[k]!==null)fr.insertLabel("mm."+k,String(o[k]));}}
+function __info(eq,checkEdit){var l=null;try{l=eq.graphic.itemLink;}catch(e){}
+ var r={type:eq.graphic.constructor.name,link:l?l.name:null,path:l?l.filePath:null,status:l?String(l.status):null,
+   embedded:l?(l.status===LinkStatus.LINK_EMBEDDED):null,placeholder:l?(l.name==="EmptyEquation.eps"):null,
+   bounds:eq.frame.geometricBounds,labels:__labels(eq.frame)};
+ try{r.anchor_y_offset=eq.frame.anchoredObjectSettings.anchorYoffset;}catch(e){}
+ try{r.overset=!eq.frame.parentPage;}catch(e){r.overset=true;}
+ if(checkEdit){var prev=app.selection;
+   try{app.select(eq.frame);r.edit_equation_enabled=__en(__action("Edit Equation",512513));}catch(e){r.edit_equation_enabled=null;r.select_error=String(e);}
+   try{if(prev.length)app.select(prev);else app.select(NothingEnum.NOTHING);}catch(e){try{app.select(NothingEnum.NOTHING);}catch(e2){}}}
+ return r;}
+function __baseline(fr,want,descent,res){if(!want){res.baseline="NOT_REQUESTED";return;}
+ var b=__action("Default Baseline",512525);
+ try{if(!b)throw Error("missing");app.select(fr);b.invoke();res.baseline="PLUGIN_DEFAULT_BASELINE";}
+ catch(e){if(descent!==null){var mu=app.scriptPreferences.measurementUnit;app.scriptPreferences.measurementUnit=MeasurementUnits.POINTS;
+   try{fr.anchoredObjectSettings.anchorYoffset=-descent;res.baseline="EPS_HEADER_BASELINE";}finally{app.scriptPreferences.measurementUnit=mu;}}
+   else{res.baseline="BASELINE_NOT_ADJUSTED";}}
+ try{app.select(NothingEnum.NOTHING);}catch(e){}}
+function __frameById(doc,id){var L=doc.links;for(var i=0;i<L.length;i++){try{var fr=L[i].parent.parent;if(fr.extractLabel("mm.id")===id)return fr;}catch(e){}}return null;}
 '''
 
 
 def _wrap(body: str) -> str:
     return "(function(){" + _PRELUDE + "\ntry{\n" + body + "\n}catch(e){return __j({ok:false,error:String(e)});}\n})();"
+
+
+def _wrap_undo(body: str, undo_name: str) -> str:
+    """Run body as a single undoable step named undo_name."""
+    return ("(function(){" + _PRELUDE + "\nvar __r=null;\ntry{app.doScript(function(){__r=(function(){\n" + body +
+            "\n})();},ScriptLanguage.JAVASCRIPT,[],UndoModes.ENTIRE_SCRIPT," + js(undo_name[:80]) +
+            ");}catch(e){return __j({ok:false,error:String(e)});}\nreturn __r;})();")
 
 
 def jsx_status(doc_name: str = "") -> str:
@@ -64,11 +98,11 @@ def jsx_status(doc_name: str = "") -> str:
 
 
 def jsx_documents() -> str:
-    """Fast document list (no menu-action scan); used on every equation."""
+    """Fast document list (no menu-action scan, ~20 ms)."""
     return _wrap(r'''
  var out={ok:true,documents:[]};
  for(var i=0;i<app.documents.length;i++){var d=app.documents[i];var p="";try{p=d.fullName.fsName;}catch(e){}
-   out.documents.push({name:d.name,path:p,modified:d.modified});}
+   out.documents.push({name:d.name,path:p,modified:d.modified,saved:d.saved});}
  out.active=app.documents.length?app.activeDocument.name:null;
  return __j(out);''')
 
@@ -79,8 +113,7 @@ def jsx_select_marker(doc_name: str, marker: str) -> str:
  var m=__findMarker(doc,{js(marker)});
  if(m.length!==1)return __j({{ok:false,error:"MARKER_COUNT",count:m.length}});
  app.select(m[0].insertionPoints[0]);
- var a=__action("New Equation",{ACTION_IDS["New Equation"]});
- return __j({{ok:true,new_equation_enabled:__en(a)}});''')
+ return __j({{ok:true,new_equation_enabled:__en(__action("New Equation",{ACTION_IDS["New Equation"]}))}});''')
 
 
 def jsx_invoke(name: str) -> str:
@@ -97,16 +130,7 @@ def jsx_equation_at_marker(doc_name: str, marker: str, check_edit: bool = True) 
  if(m.length!==1)return __j({{ok:true,marker_count:m.length,equation:null}});
  var st=m[0].parentStory;var ix=m[0].insertionPoints[0].index;
  var eq=ix>0?__eqBefore(st.characters[ix-1]):null;
- var res={{ok:true,marker_count:1,marker_index:ix,equation:null}};
- if(eq){{var l=null;try{{l=eq.graphic.itemLink;}}catch(e){{}}
-   res.equation={{type:eq.graphic.constructor.name,link:l?l.name:null,path:l?l.filePath:null,
-     status:l?String(l.status):null,embedded:l?(l.status===LinkStatus.LINK_EMBEDDED):null,
-     placeholder:l?(l.name==="EmptyEquation.eps"):null,bounds:eq.frame.geometricBounds}};
-   if({js(check_edit)}){{var prev=app.selection;app.select(eq.frame);
-     var a=__action("Edit Equation",{ACTION_IDS["Edit Equation"]});res.equation.edit_equation_enabled=__en(a);
-     try{{res.equation.anchor_y_offset=eq.frame.anchoredObjectSettings.anchorYoffset;}}catch(e){{}}
-     try{{if(prev.length)app.select(prev);else app.select(NothingEnum.NOTHING);}}catch(e){{app.select(NothingEnum.NOTHING);}}}}}}
- return __j(res);''')
+ return __j({{ok:true,marker_count:1,marker_index:ix,equation:eq?__info(eq,{js(check_edit)}):null}});''')
 
 
 def jsx_select_equation(doc_name: str, marker: str) -> str:
@@ -115,45 +139,92 @@ def jsx_select_equation(doc_name: str, marker: str) -> str:
  var m=__findMarker(doc,{js(marker)});if(m.length!==1)return __j({{ok:false,error:"MARKER_COUNT",count:m.length}});
  var st=m[0].parentStory;var ix=m[0].insertionPoints[0].index;var eq=ix>0?__eqBefore(st.characters[ix-1]):null;
  if(!eq)return __j({{ok:false,error:"NO_EQUATION_BEFORE_MARKER"}});
- app.select(eq.frame);var a=__action("Edit Equation",{ACTION_IDS["Edit Equation"]});
- return __j({{ok:true,edit_equation_enabled:__en(a),link:eq.graphic.itemLink?eq.graphic.itemLink.name:null}});''')
+ app.select(eq.frame);
+ return __j({{ok:true,edit_equation_enabled:__en(__action("Edit Equation",{ACTION_IDS["Edit Equation"]})),
+   link:eq.graphic.itemLink?eq.graphic.itemLink.name:null}});''')
 
 
 def jsx_place_eps(doc_name: str, marker: str, eps_path: str, embed: bool, default_baseline: bool, replace: bool,
-                  descent_pt: float | None = None) -> str:
-    return _wrap(f'''
+                  descent_pt: float | None = None, labels: dict | None = None, remove_marker: bool = False) -> str:
+    """Place (or replace) the EPS right before the marker, fit, embed, baseline, label, verify: one undo step."""
+    return _wrap_undo(f'''
  var doc=__doc({js(doc_name)});var f=File({js(eps_path.replace(chr(92), "/"))});
  if(!f.exists)return __j({{ok:false,error:"EPS_NOT_FOUND"}});
  var m=__findMarker(doc,{js(marker)});if(m.length!==1)return __j({{ok:false,error:"MARKER_COUNT",count:m.length}});
  var st=m[0].parentStory;var ix=m[0].insertionPoints[0].index;var old=ix>0?__eqBefore(st.characters[ix-1]):null;
- var g=null;
- if(old&&{js(replace)}){{g=old.frame.place(f)[0];}}
- else if(old&&!{js(replace)}){{return __j({{ok:false,error:"EQUATION_ALREADY_PRESENT"}});}}
- else{{st.insertionPoints[ix].place(f);var ch=st.characters[ix];var eq=__eqBefore(ch);g=eq?eq.graphic:null;}}
+ var g=null;var isPh=false;try{{isPh=old&&old.graphic.itemLink.name==="EmptyEquation.eps";}}catch(e){{}}
+ if(old&&({js(replace)}||isPh)){{g=old.frame.place(f)[0];}}
+ else if(old){{return __j({{ok:false,error:"EQUATION_ALREADY_PRESENT",equation:__info(old,false)}});}}
+ else{{st.insertionPoints[ix].place(f);var eq0=__eqBefore(st.characters[ix]);g=eq0?eq0.graphic:null;}}
  if(!g)return __j({{ok:false,error:"PLACE_FAILED"}});
  var fr=g.parent;
+ try{{g.absoluteHorizontalScale=100;g.absoluteVerticalScale=100;}}catch(e){{}}
  try{{fr.fit(FitOptions.FRAME_TO_CONTENT);}}catch(e){{}}
  if({js(embed)}){{try{{g.itemLink.unlink();}}catch(e){{}}}}
- var res={{ok:true,link:g.itemLink?g.itemLink.name:null,bounds:fr.geometricBounds,baseline:null}};
- app.select(fr);
- var ea=__action("Edit Equation",{ACTION_IDS["Edit Equation"]});res.edit_equation_enabled=__en(ea);
- if({js(default_baseline)}){{var b=__action("Default Baseline",{ACTION_IDS["Default Baseline"]});
-   try{{if(!b)throw Error("missing");b.invoke();res.baseline="PLUGIN_DEFAULT_BASELINE";}}
-   catch(e){{var d={js(descent_pt)};
-     if(d!==null){{var mu=app.scriptPreferences.measurementUnit;app.scriptPreferences.measurementUnit=MeasurementUnits.POINTS;
-       try{{fr.anchoredObjectSettings.anchorYoffset=-d;res.baseline="EPS_HEADER_BASELINE";}}
-       finally{{app.scriptPreferences.measurementUnit=mu;}}}}
-     else{{res.baseline="BASELINE_NOT_ADJUSTED";}}}}}}
- try{{res.anchor_y_offset=fr.anchoredObjectSettings.anchorYoffset;}}catch(e){{}}
- app.select(NothingEnum.NOTHING);
- return __j(res);''')
+ __setLabels(fr,{js(labels or {})});
+ var res={{ok:true}};
+ __baseline(fr,{js(default_baseline)},{js(descent_pt)},res);
+ var m2=__findMarker(doc,{js(marker)});var st2=m2[0].parentStory;var ix2=m2[0].insertionPoints[0].index;
+ var eq=__eqBefore(st2.characters[ix2-1]);res.equation=eq?__info(eq,true):null;
+ if({js(remove_marker)}&&res.equation&&!res.equation.placeholder){{m2[0].remove();res.marker_removed=true;}}
+ return __j(res);''', f"MathMagic MCP {marker}")
 
 
-def jsx_remove_marker(doc_name: str, marker: str) -> str:
+def jsx_replace_by_id(doc_name: str, eq_id: str, eps_path: str, embed: bool, default_baseline: bool,
+                      descent_pt: float | None, labels: dict) -> str:
+    return _wrap_undo(f'''
+ var doc=__doc({js(doc_name)});var f=File({js(eps_path.replace(chr(92), "/"))});
+ if(!f.exists)return __j({{ok:false,error:"EPS_NOT_FOUND"}});
+ var fr=__frameById(doc,{js(eq_id)});if(!fr)return __j({{ok:false,error:"ID_NOT_FOUND"}});
+ var g=fr.place(f)[0];
+ try{{g.absoluteHorizontalScale=100;g.absoluteVerticalScale=100;}}catch(e){{}}
+ try{{fr.fit(FitOptions.FRAME_TO_CONTENT);}}catch(e){{}}
+ if({js(embed)}){{try{{g.itemLink.unlink();}}catch(e){{}}}}
+ __setLabels(fr,{js(labels)});var res={{ok:true}};
+ __baseline(fr,{js(default_baseline)},{js(descent_pt)},res);
+ res.equation=__info({{frame:fr,graphic:fr.allGraphics[0]}},true);return __j(res);''', f"MathMagic MCP restyle {eq_id}")
+
+
+def jsx_tag_at_marker(doc_name: str, marker: str, labels: dict) -> str:
     return _wrap(f'''
  var doc=__doc({js(doc_name)});var m=__findMarker(doc,{js(marker)});
  if(m.length!==1)return __j({{ok:false,error:"MARKER_COUNT",count:m.length}});
- m[0].remove();return __j({{ok:true}});''')
+ var st=m[0].parentStory;var ix=m[0].insertionPoints[0].index;var eq=ix>0?__eqBefore(st.characters[ix-1]):null;
+ if(!eq)return __j({{ok:false,error:"NO_EQUATION_BEFORE_MARKER"}});
+ __setLabels(eq.frame,{js(labels)});return __j({{ok:true}});''')
+
+
+def jsx_list_equations(doc_name: str, include_latex: bool = False, deep: bool = False) -> str:
+    """Tagged equations, plugin names (EQ-MMDD-HHMMSS.eps), placeholders and v0.3 offline names (<id>-<sha10>.eps).
+    deep=True also asks the plugin (Edit Equation enabled) for every other EPS link (~40 ms each)."""
+    return _wrap(f'''
+ var doc=__doc({js(doc_name)});var L=doc.links;var out=[];
+ for(var i=0;i<L.length;i++){{var l=L[i];var g=null,fr=null;try{{g=l.parent;fr=g.parent;}}catch(e){{continue;}}
+   var lab=__labels(fr);var name=l.name;
+   var known=lab.id||/^EQ-\\d{{4}}-\\d{{6}}\\.eps$/i.test(name)||name==="EmptyEquation.eps"||/^[A-Za-z0-9_-]{{1,40}}-[0-9a-f]{{10}}\\.eps$/i.test(name);
+   if(!known&&{js(deep)}&&/\\.eps$/i.test(name)){{var prev=app.selection;try{{app.select(fr);known=__en(__action("Edit Equation",512513))===true;}}catch(e){{}}
+     try{{if(prev.length)app.select(prev);else app.select(NothingEnum.NOTHING);}}catch(e){{}}}}
+   if(!known)continue;
+   var page=null;try{{page=fr.parentPage?fr.parentPage.name:null;}}catch(e){{}}
+   var anchored=false;try{{anchored=fr.parent.constructor.name==="Character";}}catch(e){{}}
+   var item={{id:lab.id||null,link:name,embedded:l.status===LinkStatus.LINK_EMBEDDED,placeholder:name==="EmptyEquation.eps",
+     page:page,anchored:anchored,sha:lab.sha||null,style:lab.style||null,tool:lab.tool||null}};
+   if({js(include_latex)})item.latex=lab.latex||null;
+   out.push(item);}}
+ return __j({{ok:true,count:out.length,equations:out}});''')
+
+
+def jsx_save_document(doc_name: str) -> str:
+    return _wrap(f'''
+ var doc=__doc({js(doc_name)});if(!doc.saved)return __j({{ok:false,error:"DOCUMENT_NEVER_SAVED"}});
+ doc.save();return __j({{ok:true,modified:doc.modified}});''')
+
+
+def jsx_remove_marker(doc_name: str, marker: str) -> str:
+    return _wrap_undo(f'''
+ var doc=__doc({js(doc_name)});var m=__findMarker(doc,{js(marker)});
+ if(m.length!==1)return __j({{ok:false,error:"MARKER_COUNT",count:m.length}});
+ m[0].remove();return __j({{ok:true}});''', f"MathMagic MCP remove {marker}")
 
 
 class InDesignCOM:

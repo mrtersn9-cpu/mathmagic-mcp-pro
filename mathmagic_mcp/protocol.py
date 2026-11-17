@@ -29,9 +29,10 @@ def b(description: str) -> dict:
 
 
 class MCPServer:
-    def __init__(self, tools: dict[str, tuple[dict, Callable]], version="0.1.0"):
+    def __init__(self, tools: dict[str, tuple[dict, Callable]], version="0.1.0", instructions: str = ""):
         self.tools = tools
         self.version = version
+        self.instructions = instructions
 
     @staticmethod
     def _send(message: dict) -> None:
@@ -52,11 +53,11 @@ class MCPServer:
             # We support the core messages used by current Claude Desktop MCP clients.
             supported = {"2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25", "2026-07-28"}
             version = requested if requested in supported else "2025-06-18"
-            return {"jsonrpc": "2.0", "id": ident, "result": {
-                "protocolVersion": version,
-                "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "mathmagic-mcp-pro", "version": self.version},
-            }}
+            result = {"protocolVersion": version, "capabilities": {"tools": {"listChanged": False}},
+                      "serverInfo": {"name": "mathmagic-mcp-pro", "version": self.version}}
+            if self.instructions:
+                result["instructions"] = self.instructions   # MCP InitializeResult.instructions (client system prompt)
+            return {"jsonrpc": "2.0", "id": ident, "result": result}
         if method == "ping":
             return {"jsonrpc": "2.0", "id": ident, "result": {}}
         if method == "tools/list":

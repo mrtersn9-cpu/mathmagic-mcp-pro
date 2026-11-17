@@ -1,121 +1,137 @@
-# MathMagic MCP Pro (Windows / InDesign 2026)
+# MathMagic MCP Pro (Windows / InDesign 2026) · v0.4.1
 
-[![Status](https://img.shields.io/badge/status-experimental-orange)](#what-works-and-what-is-unverified)
+[![Status](https://img.shields.io/badge/status-beta%20(canl%C4%B1%20test%20edildi)-yellow)](#neler-doğrulandı-neler-doğrulanmadı)
 
-**Claude Desktop + Adobe InDesign 2026 + MathMagic Pro 9.31** için yerel MCP sunucusu.
-Mevcut InDesign MCP'nizi **değiştirmez**; yanında ayrı bir araç seti olarak çalışır.
+Bu MCP sunucusu, **Claude** (Claude Code / Claude Desktop) ile **Adobe InDesign 2026** ve **MathMagic Pro 9.31 InD** arasında çalışır. InDesign metin çerçevelerine **yerel, düzenlenebilir, gömülü MathMagic formülleri** yerleştirir. Bu iş arka planda yürür; siz başka programlarda çalışmaya devam edebilirsiniz. Mevcut InDesign MCP'nizi değiştirmez, onun yanında ayrı bir araç seti olarak çalışır.
 
-## v0.3 — Pro mesaj adaptörü (önerilen giriş noktası: `server_pro.py`)
+## Temel ilkeler
 
-v0.3, v0.1'in klavye/pano adaptörünün yerine **Windows pencere mesajları** kullanır (`WM_CHAR`, `WM_COMMAND`, `WM_SETTEXT`). Fare, klavye, pano, `SetFocus`/`SetForegroundWindow` kullanmaz. Lisans penceresine dokunmaz.
-
-Gerçek bir Windows 11 + InDesign 2026 + MathMagic Pro 9.31 (deneme modu) ortamında canlı test edildi:
-
-- **`offline` (varsayılan):** MathMagic EPS üretir, InDesign işaretçiye `place()` ile yerleştirir, belgeye gömer ve eklentinin *Default Baseline* ayarını uygular. Ölçülen hız ~1,2–1,8 sn/formül. Testlerde kullanıcının öndeki uygulamasını öne çekmedi.
-- **`plugin`:** Eklentinin New/Edit Equation eylemi → bağlı MathMagic penceresi (mesajla) → *Update* (32880). Ölçülen hız ~2–3,5 sn/formül. Eklentinin kendisi her formülde pencereleri öne getirir.
-- **Araçlar:** 19 araç; değişiklik yapanların hepsi `confirm=true` ister. Toplu iş zaman bütçeli çalışır ve `next_index` ile kaldığı yerden devam eder (2000 formüle kadar). Her sonuçta doğrulama ve ön plan (odak) raporu döner.
-- **Bilinen sınırlar:**
-  - Deneme modunda her açılışta lisans penceresi çıkar ve bazı EPS çıktılarında "Demo" filigranı olur.
-  - Stil setindeki eksik yazı tipi uyarısı otomatik onaylanır, ama stil setinin düzeltilmesi gerekir.
-
-Ayrıntılar: [`docs/PRO_V03_TR.md`](docs/PRO_V03_TR.md). Claude kaydı: `command` = `.venv\Scripts\python.exe`, `args` = `["-u", "<proje>\\server_pro.py"]`, `env.MATHMAGIC_DEFAULT_MODE` = `offline`.
-
-> **Önemli (v0.1/v0.2 için geçerli not):** Bu bir *doğrulanmış MathMagic API entegrasyonu* değildir. MathMagic'in belgelenmiş bir Windows otomasyon API'si bulunamadı. InDesign menü eylemi Windows COM/ExtendScript ile çağrılır; dış MathMagic editörü daha hızlı, hedefli bir `pywinauto`/klavye adaptörüyle kontrol edilmeye *çalışılır*. Gerçek InDesign 2026 + MathMagic 9.31 ortamında henüz uçtan uca test edilmemiştir. Formülün başarıyla işlendiği **otomatik olarak varsayılmaz**.
+- **Yalnız pencere mesajları ve InDesign COM kullanılır.**
+  - MathMagic `WM_CHAR`, `WM_COMMAND`, `WM_SETTEXT` ve `BM_CLICK` mesajlarıyla yönetilir.
+  - InDesign, sabit JSX içeren `DoScript` çağrılarıyla yönetilir.
+  - Klavye/fare simülasyonu, pano, `SetFocus`/`SetForegroundWindow` ve ekran görüntüsü/OCR **kullanılmaz**.
+- **Tek kanal.** MathMagic yalnız bu sunucunun `mathmagic_*` araçlarıyla sürülür. Windows MCP, computer-use veya tuş/fare gönderen betikler MathMagic ya da InDesign penceresinde kullanılmaz. Bu kural, sunucunun istemciye verdiği talimatlarda da yer alır.
+- **Lisans/Try penceresine dokunulmaz.** Araç `LICENSE_REQUIRED` döndürür; pencereyi kullanıcı kapatır.
+- **Onay gerekir.** Değişiklik yapan her araç `confirm=true` ister. Süreçler arası kilit vardır: başka bir oturum çalışıyorsa araç `BUSY` döndürür.
+- **Kaydetme yalnız istenirse yapılır** (`save_every` veya `mathmagic_save_document`). Formül eklemeden önce `mathmagic_backup_indd` ile yedek alınır.
 
 ## Mimari
 
 ```text
-Claude Desktop
-  ├── mevcut InDesign MCP → sayfa, metin, soru konumu, [[MM:ID]] işaretleri
-  └── mathmagic-mcp-pro (stdio / yerel Python)
-        ├── Preflight, LaTeX doğrulama, iş kaydı
-        ├── InDesign COM → DoScript(ExtendScript)
-        │      └── Plug-Ins > MathMagic > New/Edit Equation menü eylemi
-        └── MathMagic 9.31 InD.exe (hedefli pencere otomasyonu)
-               ├── LaTeX yapıştırma
-               ├── Shift+Enter (TeX → equation)
-               └── Ctrl+S (kaydet ve InDesign'a geri dön)
+Claude
+  ├── InDesign MCP ─────────── metin çerçeveleri, stiller, sayfalama, tekil [[MM:ID]] işaretçileri
+  └── mathmagic-mcp-pro (stdio, yerel Python)
+        ├── çevrimdışı mod (varsayılan, odak almaz)
+        │     MathMagic: temizle + LaTeX yaz + TeX dönüştür (tek mesaj kuyruğu) → Save As EPS (+ LaTeX geri doğrulama)
+        │     InDesign: işaretçiye satır içi yerleştir, göm, %100 ölçek, Default Baseline, etiketle, tek "Geri Al" adımı
+        └── eklenti modu: InDesign MathMagic eklentisi New/Edit Equation + Update (pencereleri öne getirir)
 ```
 
-**Genel Windows MCP veya ekran görüntüsü/OCR kullanmaz.** Yine de MathMagic'in dış editöründe kullanıcı arayüzü otomasyonuna bağımlıdır; pencerelerin açılması, odak ve lisans diyalogları hâlâ sorun çıkarabilir.
+## Araçlar (27)
 
-## Hızlı kurulum
+**Salt okunur:**
+- `mathmagic_policy`, `mathmagic_preflight`, `mathmagic_status`, `mathmagic_capabilities` (213 menü komutu ve 13 eklenti eyleminin canlı envanteri)
+- `mathmagic_inspect_indesign`, `mathmagic_probe_uia`, `mathmagic_preview_equation`, `mathmagic_preview_batch`
+- `mathmagic_verify_equation`, `mathmagic_list_equations`, `mathmagic_get_style`, `mathmagic_capture_editor`
 
-Gerekenler: **Windows 10/11**, **Python 3.10+**, **Claude Desktop**, **Adobe InDesign 2026**, **MathMagic Pro 9.31 InD.exe**, InDesign `Plug-Ins\MathMagic CC2026-64bit` eklentisi. InDesign menüsünden **MathMagic → New Equation** işleminin elle çalıştığını doğrulayın.
+**Değişiklik yapanlar** (`confirm=true` gerekir):
+- `mathmagic_launch`, `mathmagic_dismiss_dialogs`
+- `mathmagic_create_equation`, `mathmagic_edit_equation`
+- `mathmagic_export_equation` (EPS, SVG, MathML, PNG, LaTeX…), `mathmagic_render_eps`, `mathmagic_place_eps`
+- `mathmagic_run_batch`, `mathmagic_rerender_equations`
+- `mathmagic_set_style`, `mathmagic_apply_styleset`
+- `mathmagic_prepare_offline_batch`, `mathmagic_backup_indd`, `mathmagic_save_document`, `mathmagic_cleanup_marker`
 
-1. Bu projeyi bilgisayarınıza indirin veya ZIP'i açın (ör. `C:\Tools\mathmagic-mcp-pro`).
-2. Proje klasöründe PowerShell açın ve çalıştırın:
+Ayrıntılar: [`docs/PRO_V04_TR.md`](docs/PRO_V04_TR.md) · Komut envanteri: [`docs/MATHMAGIC_KOMUT_ENVANTERI_TR.md`](docs/MATHMAGIC_KOMUT_ENVANTERI_TR.md)
 
-   ```powershell
-   powershell -ExecutionPolicy Bypass -File .\install.ps1
+## Soru bankası iş akışı
+
+1. `mathmagic_preflight` çalıştırılır. Ardından kitap yazı tipi ve puntosu bir kez `mathmagic_set_style` ile verilir. Örnek: `name="SB Matematik 10.4"`, `font="Times New Roman"`, `size_pt=10.4`, `variable_italic=true`.
+2. InDesign MCP metni yazar. Her formülün yerinde tekil bir işaretçi bulunur (`[[MM:Q0001-M1]]`). Ardından belge kaydedilir.
+3. Sırasıyla `mathmagic_backup_indd` ve `mathmagic_preview_batch` çalıştırılır.
+4. Toplu iş çalıştırılır:
    ```
-3. Betik, mevcut Claude Desktop MCP yapılandırmasını **yedekler** ve `mathmagic-mcp-pro` girdisini ekler. Mevcut InDesign MCP korunur.
-4. Claude Desktop'ı tamamen kapatıp yeniden açın.
-5. Claude'a sırasıyla **`mathmagic_preflight`**, **`mathmagic_inspect_indesign`**, **`mathmagic_preview_equation`** çağrılarını yaptırın.
-6. Önce *orijinal olmayan* bir InDesign test belgesinde tek formül deneyin.
+   mathmagic_run_batch(manifest_path, document, mode="offline", verify_latex=true,
+                       remove_markers=true, time_budget_s=600, save_every=50, confirm=true)
+   ```
+   `next_index` doluysa aynı çağrı `start_index=next_index` ile tekrarlanır.
+5. `mathmagic_list_equations` ile kontrol edilir. Belgede `[[MM:` kalmamalı; `placeholders` ve `not_embedded` 0 olmalı.
 
-Detaylı Türkçe rehber: [`docs/KURULUM_TR.md`](docs/KURULUM_TR.md)
+Manifest biçimi: `{"equations":[{"id":"Q0001-M1","marker":"[[MM:Q0001-M1]]","latex":"\\frac{3}{4}","size_pt":11.5}]}`
 
-## Kullanılabilir araçlar
+**soru-bankasi-uret-pro skill'i** soru bankası JSON'undan işaretçili InDesign iş emirlerini ve ünite bazlı manifestleri otomatik üretir (`scripts/prepare_mathmagic.py`). Protokolü `indesign/MATHMAGIC-ENTEGRASYON.md` belgesindedir.
 
-| MCP aracı | Görev | Belge değiştirir mi? |
-| --- | --- | --- |
-| `mathmagic_preflight` | Sürüm/yol/bağımlılık kontrolü | Hayır |
-| `mathmagic_inspect_indesign` | Belge ve MathMagic menü eylemlerini bul | Hayır |
-| `mathmagic_preview_equation` | Tek formülü doğrula; işlem planını göster | Hayır |
-| `mathmagic_create_equation` | Seçili metin noktasına MathMagic formülü eklemeyi dene | **Evet**, `confirm=true` |
-| `mathmagic_edit_equation` | Seçili MathMagic nesnesini yeniden düzenlemeyi dene | **Evet**, `confirm=true` |
-| `mathmagic_backup_indd` | Son kaydedilmiş INDD dosyasını başka klasöre kopyala | Kaynak hayır |
-| `mathmagic_check_marker` | Tekil `[[MM:ID]]` işaretçisini incele | Hayır |
-| `mathmagic_preview_batch` | 1–100 formüllük JSON iş listesini kontrol et | Hayır |
-| `mathmagic_run_batch_first` | Listede `start_index` konumundaki **tek** formülü uygula ve dur | **Evet**, `confirm=true` |
-| `mathmagic_cleanup_marker` | Kontrol sonrası işaretçiyi kaldır | **Evet**, çift onay |
+**Dizgi notu:** Üst üste kesir içeren satır içi formül paragraflarına sabit satır aralığı verin (metin puntosunun yaklaşık 1,75 katı). Otomatik satır aralığı MathMagic'in taban çizgisi kaydırmasını hesaba katmaz ve kesirler üst üste biner (canlı test).
 
-> Toplu süreç bilinçli olarak her formülde durur. **100 formülü gözetimsiz ve garantili biçimde dönüştürüyor** iddiası yoktur. `start_index` ile sonraki işe geçilebilir.
+## Sonuç durumları
 
-## Çalışma örneği
+| Durum | Anlamı |
+|---|---|
+| `INSERTED_VERIFIED` | Formül yerleşti, gömüldü, EPS'te MathMagic formül verisi (MMF) var, LaTeX doğrulaması geçti |
+| `SKIPPED_ALREADY_DONE` | Aynı LaTeX daha önce eklenmiş (etiketteki SHA eşleşti) |
+| `LATEX_MISMATCH` | MathMagic farklı bir yapı kurdu. `latex_exported` alanı MathMagic'in ne ürettiğini gösterir; kaynak düzeltilir. |
+| `EMPTY_RENDER` | Formül iki denemede de boş çıktı (yazılan karakterler kayboldu); yeniden çalıştırılır |
+| `LICENSE_REQUIRED` / `MATHMAGIC_NOT_READY` | Lisans/Try penceresi açık; kullanıcı kapatır |
+| `MARKER_COUNT` | İşaretçi yok ya da birden fazla |
+| `BUSY` | Başka bir oturum MathMagic kilidini tutuyor |
 
-Mevcut InDesign MCP ile `[[MM:Q001]]` işaretini ilgili soru metnine koyun; ardından Claude'a:
+## Kurulum (Claude Code)
 
-> MathMagic MCP araçlarını kullan. `mathmagic_inspect_indesign` ile eylemleri doğrula. `[[MM:Q001]]` konumuna `\frac{3}{4}+\frac{1}{2}` formülünü MathMagic üzerinden eklemeyi önce önizle, sonra onay verdiğimde uygula. MathMagic'te kaydedildiğini ve InDesign'da düzenlenebilir olduğunu **görsel inceleme yapılmadan kesin doğrulanmış sayma**.
+Gerekenler: Windows 10/11, Python 3.10+, `pywin32`, Adobe InDesign 2026, MathMagic Pro 9.31 InD ve InDesign `Plug-Ins\MathMagic CC2026-64bit` eklentisi.
 
-Örnek manifest: [`examples/equations.json`](examples/equations.json)
+```powershell
+python -m venv .venv
+.\.venv\Scripts\pip install -r requirements-windows.txt
+```
 
-## What works and what is unverified
+`mathmagic-mcp-pro.json` dosyası (yolları kendi klasörünüze göre düzeltin):
 
-- ✅ MCP stdio protokolü, araç listesi, giriş doğrulama, kuru çalışma, iş kayıtları ve testleri yerel ortamda çalıştırıldı.
-- ✅ Kaynak kodda InDesign COM/DoScript köprüsü ve MathMagic süreç yolunu denetleyen pencere adaptörü bulunuyor.
-- ⚠️ Windows üzerinde gerçek COM/plug-in çağrıları ve LaTeX dönüştürme akışı bu geliştirme ortamında test edilemedi.
-- ⚠️ MathMagic editörünün `Ctrl+A`, `Ctrl+V`, `Shift+Enter`, `Ctrl+S` tepkileri kurulu sürümde ayrıca doğrulanmalı.
-- ❌ Matematiksel eşdeğerlik, yüzde yüz doğru tipografi, formülün *native MathMagic object* olması veya çift tıklayarak açılabilirliğinin otomatik doğrulanması **henüz uygulanmadı**.
-- ❌ Yerel vendor C++ `.InDesignPlugin` eklentisi üretilmedi. Program, **mevcut resmî MathMagic eklentisini çağırır**.
+```json
+{"type":"stdio","command":"C:\\...\\mathmagic-mcp-pro\\.venv\\Scripts\\python.exe",
+ "args":["-u","C:\\...\\mathmagic-mcp-pro\\server_pro.py"],
+ "env":{"MATHMAGIC_EXE":"C:\\Program Files (x86)\\MathMagic Pro Edition\\MathMagic Pro 9.31 InD.exe",
+        "MATHMAGIC_DEFAULT_MODE":"offline"}}
+```
 
-## Güvenlik
+```bash
+# Git Bash (Windows PowerShell 5.1, yerel programlara verilen JSON'daki tırnakları siler)
+claude mcp add-json mathmagic-mcp-pro "$(cat mathmagic-mcp-pro.json)" -s user
+```
 
-- Yerel stdio dışında ağ dinleyicisi yoktur; API anahtarı gerekmez.
-- Dosya mutasyonları açık `confirm=true` gerektirir.
-- Asıl `.indd` belgeyi otomatik kaydetmez, üzerine yazmaz, silmez.
-- Denetim kayıtlarına ham formül yazılmaz; SHA-256 özeti yazılır.
-- Tek süreç içinde eşzamanlı MathMagic işleri kilitlenir. **Diğer InDesign MCP de aynı anda belge düzenlememelidir.** İki bağımsız MCP arasında küresel kilit bulunmuyor.
-- Pano metin yedeği alınabilirse geri yüklenir; görüntü gibi metin dışı pano verisinin korunması garanti edilmez.
+`install.ps1` eski v0.1 sunucusunu (`server.py`) Claude Desktop'a kaydeder. Pro sürüm için yukarıdaki kaydı kullanın. Kayıttan sonra yeni bir Claude oturumu açın. Mevcut InDesign MCP kaydına dokunulmaz.
+
+## Ölçülen hız (deneme modu)
+
+| Mod | Süre |
+|---|---|
+| Çevrimdışı, LaTeX doğrulaması kapalı | 1,8–2,3 sn/formül |
+| Çevrimdışı, LaTeX doğrulaması açık | 2,8–4,5 sn/formül (uzun oturumda yükselir; çalışma belgesi 25 kullanımda bir tazelenir) |
+| Eklenti modu | 2,5–2,8 sn/formül; pencereleri öne getirir |
+
+Lisanslı sürümde toplu dönüştürme (File > Convert) daha hızlı bir yol olabilir; deneme sürümü bunu engelliyor, henüz test edilmedi.
+
+## Neler doğrulandı, neler doğrulanmadı
+
+- ✅ **Canlı uçtan uca test** (17.11.2026, test belgesi). Soru bankası örneğindeki 16 formül çevrimdışı modda yerleşti; sonuçlar `INSERTED_VERIFIED` ve LaTeX doğrulaması `EQUIVALENT`/`EXACT`. Hiçbir işlem kullanıcının uygulamasından odak almadı. Formüllerin tamamı gömülü ve tek StyleSet'te.
+- ✅ **Yazı tipi seçimi:** StyleSet'te Times New Roman uyarısız çalıştı. Myriad Pro ve Helvetica Neue, MathMagic'te yazı tipi uyarısı veriyor.
+- ✅ **Kullanıcı girdisi koruması:** Kullanıcı Alt+Tab ile Alt tuşunu basılı tutarken MathMagic'e giden karakterler kayboluyordu. Araç artık tuşun bırakılmasını bekliyor ve boş formülü bir kez yeniden deniyor (canlı doğrulandı).
+- ✅ **Birim testleri:** 82 test geçiyor.
+- ⚠️ **Doğrulanmayanlar:**
+  - Tablo hücresindeki işaretçi canlı denenmedi. InDesign MCP'nin tablo araçları bu ortamda hata verdi.
+  - PDF dışa aktarma Helvetica Neue stilinde MathMagic hatası veriyor.
+  - Lisanslı sürüm davranışı: "Demo" filigranı, açılış penceresi ve toplu dönüştürme.
+- ❌ **Bilinen sınırlar:**
+  - Eklenti modu pencereleri öne getirir.
+  - Deneme sürümü her yeni süreçte lisans penceresi açar.
+  - Formüllerin matematiksel doğruluğunu ve son baskı kalitesini insan editör onaylar.
 
 ## Belgeler
 
-- [Kurulum ve test (TR)](docs/KURULUM_TR.md)
-- [Mimari, veri akışı ve sınırlamalar](docs/MIMARI.md)
-- [Araç API sözleşmesi](docs/API.md)
-- [Matbaa / soru bankası kalite kontrol](docs/KALITE_KONTROL.md)
-- [Sorun giderme](docs/SORUN_GIDERME.md)
-- [Güvenlik ve ürünleştirme yol haritası](docs/GUVENLIK_YOL_HARITASI.md)
-
-## Kaynaklar
-
-- MathMagic Pro/InDesign kurulum ve `New Equation` açıklaması: https://mathmagic.com.hk/pro.html
-- MathMagic LaTeX yapıştırma ve **Shift+Return**: https://mathmagicturkiye.com/support/faqs.html
-- InDesign Windows COM `DoScript` uygulama örneği: https://github.com/Tlechanteur/indesign-mcp-server-windows/blob/main/WINDOWS.md
-- Adobe InDesign betik otomasyonu: https://helpx.adobe.com/indesign/desktop/automation-and-scripting/document-automation/automate-workflows-with-scripts.html
-- MCP stdio ve Claude Desktop: https://modelcontextprotocol.io/docs/develop/build-server
+- [v0.4 kullanım kılavuzu](docs/PRO_V04_TR.md) · [MathMagic komut envanteri](docs/MATHMAGIC_KOMUT_ENVANTERI_TR.md)
+- [Arka plan modu](docs/ARKA_PLAN_MODU_TR.md) · [Mimari](docs/MIMARI.md) · [API](docs/API.md)
+- [Kalite kontrol](docs/KALITE_KONTROL.md) · [Sorun giderme](docs/SORUN_GIDERME.md) · [Güvenlik yol haritası](docs/GUVENLIK_YOL_HARITASI.md)
+- Eski sürümler: [v0.3](docs/PRO_V03_TR.md) · [Kurulum (v0.1)](docs/KURULUM_TR.md)
 
 ## Lisans
 
-Kaynak kodu `LICENSE` altındaki MIT lisansı ile sağlanmıştır. MathMagic ve Adobe InDesign ticari ürünleridir ve bu depoya dahil değildir.
+Kaynak kodu `LICENSE` altındaki MIT lisansıyla sağlanır. MathMagic ve Adobe InDesign ticari ürünlerdir ve bu depoya dahil değildir.
