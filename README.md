@@ -1,4 +1,4 @@
-# MathMagic MCP Pro (Windows / InDesign 2026) · v0.4.1
+# MathMagic MCP Pro (Windows / InDesign 2026) · v0.4.2
 
 [![Status](https://img.shields.io/badge/status-beta%20(canl%C4%B1%20test%20edildi)-yellow)](#neler-doğrulandı-neler-doğrulanmadı)
 
@@ -66,6 +66,28 @@ Manifest biçimi: `{"equations":[{"id":"Q0001-M1","marker":"[[MM:Q0001-M1]]","la
 
 **Dizgi notu:** Üst üste kesir içeren satır içi formül paragraflarına sabit satır aralığı verin (metin puntosunun yaklaşık 1,75 katı). Otomatik satır aralığı MathMagic'in taban çizgisi kaydırmasını hesaba katmaz ve kesirler üst üste biner (canlı test).
 
+## Geometri: üçgen şapka ve yay (v0.4.2)
+
+| Yazım | Sonuç | MathMagic şablonu |
+|---|---|---|
+| `m(\widehat{DEF})` | Açı ölçüsü: DEF üzerinde geniş **üçgen şapka** | Wide Hat, `V(42)` |
+| `\overarc{AB}` (`\wideparen`, `\overparen`) | Yay | Over Elliptical Arc, `V(19)` |
+| `\hat{E}` | Tek harf üzerinde küçük şapka | Hat (yalnız tek harf) |
+
+**Neden gerekli?** MathMagic'in TeX dönüştürücüsü `\widehat` komutunu desteklemiyor ve içeriği siliyor (`m(\widehat{DEF})` → `m()`). `\hat{DEF}` ise şapkayı yalnız D'ye koyuyor ve kapanış parantezini içeri alıyor. `\overset{\wedge}` küçük bir ∧ işaretini havada bırakıyor. Hepsi canlı testte görüldü.
+
+**Nasıl çalışır?**
+
+1. Sunucu formülü önce `\overbrace` yer tutucusuyla yazar ve yapıyı LaTeX ile doğrular.
+2. Formülü MathMagic'in kendi `.mmf` metin biçiminde kaydeder ve simgeyi `V(42)` (şapka) ya da `V(19)` (yay) yapar.
+3. Dosyayı File > Open ile, yine yalnız pencere mesajlarıyla yeniden açar ve EPS'e aktarır.
+
+Sonuç EPS'i normal bir MathMagic formülü gibi düzenlenebilir; MathMagic'in LaTeX çıktısı `\widehat{DEF}` olur. Yanıttaki `native_accents` alanı kullanılan simgeleri gösterir.
+
+**Sınırlar:**
+- `\overbrace` aynı formülde kullanılamaz (yer tutucu); bu durumda sonuç `NATIVE_ACCENT_UNSUPPORTED` olur.
+- Şapka ve yay yüksekliği StyleSet'teki "Embellishment height" değeridir, `size_pt` ile büyümez (10–12 pt kitap puntolarında orantılıdır).
+
 ## Sonuç durumları
 
 | Durum | Anlamı |
@@ -77,6 +99,7 @@ Manifest biçimi: `{"equations":[{"id":"Q0001-M1","marker":"[[MM:Q0001-M1]]","la
 | `LICENSE_REQUIRED` / `MATHMAGIC_NOT_READY` | Lisans/Try penceresi açık; kullanıcı kapatır |
 | `MARKER_COUNT` | İşaretçi yok ya da birden fazla |
 | `BUSY` | Başka bir oturum MathMagic kilidini tutuyor |
+| `NATIVE_ACCENT_UNSUPPORTED` | `\widehat`/`\overarc` ile `\overbrace` aynı formülde |
 
 ## Kurulum (Claude Code)
 
@@ -88,7 +111,7 @@ cd C:\Users\<kullanıcı>\mcp-servers\mathmagic-mcp-pro
 python -m venv .venv
 .\.venv\Scripts\pip install -r requirements-windows.txt
 .\.venv\Scripts\pip install pytest
-.\.venv\Scripts\python -m pytest -q tests     # 82 test
+.\.venv\Scripts\python -m pytest -q tests     # 87 test
 ```
 
 `mathmagic-mcp-pro.json` dosyası (yolları kendi klasörünüze göre düzeltin):
@@ -122,7 +145,8 @@ Lisanslı sürümde toplu dönüştürme (File > Convert) daha hızlı bir yol o
 - ✅ **Canlı uçtan uca test** (17.11.2026, test belgesi). Soru bankası örneğindeki 16 formül çevrimdışı modda yerleşti; sonuçlar `INSERTED_VERIFIED` ve LaTeX doğrulaması `EQUIVALENT`/`EXACT`. Hiçbir işlem kullanıcının uygulamasından odak almadı. Formüllerin tamamı gömülü ve tek StyleSet'te.
 - ✅ **Yazı tipi seçimi:** StyleSet'te Times New Roman uyarısız çalıştı. Myriad Pro ve Helvetica Neue, MathMagic'te yazı tipi uyarısı veriyor.
 - ✅ **Kullanıcı girdisi koruması:** Kullanıcı Alt+Tab ile Alt tuşunu basılı tutarken MathMagic'e giden karakterler kayboluyordu. Araç artık tuşun bırakılmasını bekliyor ve boş formülü bir kez yeniden deniyor (canlı doğrulandı).
-- ✅ **Birim testleri:** 82 test geçiyor.
+- ✅ **Geometri şapkası (v0.4.2):** `m(\widehat{DEF})`, `m(\widehat{ABC})=60^{\circ}`, `\widehat{E}+\widehat{F}=90^{\circ}` ve `m(\overarc{AB})` canlı üretildi: `RENDERED`, LaTeX `EQUIVALENT`, odak alınmadı. Doğrulama kapalıyken de çalışıyor.
+- ✅ **Birim testleri:** 87 test geçiyor.
 - ⚠️ **Doğrulanmayanlar:**
   - Tablo hücresindeki işaretçi canlı denenmedi. InDesign MCP'nin tablo araçları bu ortamda hata verdi.
   - PDF dışa aktarma Helvetica Neue stilinde MathMagic hatası veriyor.

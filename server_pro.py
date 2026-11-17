@@ -1,4 +1,4 @@
-"""MathMagic MCP Pro v0.4.1 - full MathMagic tool set with the message adapter (no keyboard/mouse/clipboard).
+"""MathMagic MCP Pro v0.4.2 - full MathMagic tool set with the message adapter (no keyboard/mouse/clipboard).
 
 Run: python -u server_pro.py   (stdio JSON-RPC, one message per line)
 """
@@ -84,7 +84,14 @@ def policy() -> dict:
                               "user_switched_apps (the user's own Alt+Tab)"],
         "content_checks": ["LaTeX round-trip (verify_latex, default on): EXACT / EQUIVALENT / DIFFERENT -> LATEX_MISMATCH",
                            "auto-fix of MathMagic's large-operator binding (\\int_0^1 x^2 -> {x^2}), reported as latex_rewrites",
-                           "style-only variants are equivalent (\\dfrac/\\tfrac/\\cfrac = \\frac, size hints ignored)"],
+                           "style-only variants are equivalent (\\dfrac/\\tfrac/\\cfrac = \\frac, size hints ignored)",
+                           "multi-digit numbers are one unit (60^{\\circ} == {60}^{\\circ})"],
+        "native_accents": {"\\widehat{..}": "Wide Hat (triangular) - MathMagic variable symbol V(42)",
+                           "\\overarc{..} / \\wideparen{..} / \\overparen{..}": "Over Elliptical Arc - V(19)",
+                           "how": "typed with an \\overbrace placeholder, structure verified, saved as native .mmf, symbol "
+                                  "swapped, reopened (File > Open by messages) and exported; result field native_accents",
+                           "limits": ["\\overbrace cannot be used in the same equation (NATIVE_ACCENT_UNSUPPORTED)",
+                                      "hat/arc height is a StyleSet spacing value, it does not grow with size_pt"]},
         "layout_notes": ["equations are inline, embedded, scale 100%, Default Baseline applied",
                          "paragraphs with stacked inline fractions need fixed leading (~1.75 x size); auto leading overlaps"],
     }
@@ -455,6 +462,9 @@ InDesign COM (no keyboard, mouse, clipboard or focus stealing in the default off
 - LATEX_MISMATCH: MathMagic built a different structure; fix the source LaTeX (wrap operands of \\int/\\sum: {x^2}).
   EMPTY_RENDER: typed characters were lost twice (e.g. the user held Alt/Ctrl); simply run again.
 - Stacked inline fractions need fixed paragraph leading (~1.75 x text size); auto leading overlaps.
+- Geometry accents: write angles as m(\\widehat{DEF}) (triangular wide hat) and arcs as \\overarc{AB}. MathMagic's own
+  TeX import cannot build these (\\widehat loses its content), so the server builds them through MathMagic's native
+  .mmf format automatically. \\hat{X} is for ONE letter only; never \\stackrel. Do not combine \\overbrace with them.
 - Question banks: the soru-bankasi-uret-pro skill (scripts/prepare_mathmagic.py, indesign/MATHMAGIC-ENTEGRASYON.md)
   produces the marker text and manifests."""
 

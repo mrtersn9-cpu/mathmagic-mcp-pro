@@ -20,7 +20,7 @@ from typing import Callable, Iterable
 from . import win32util as w
 
 CMD = {
-    "new": 57600, "close_doc": 32901, "save": 57603, "save_as": 57604, "save_copy": 32881,
+    "new": 57600, "open": 57601, "close_doc": 32901, "save": 57603, "save_as": 57604, "save_copy": 32881,
     "update": 32880, "select_all": 57642, "delete": 32825, "convert_tex": 32922, "styleset": 32900,
 }
 SIZE_CMDS = {6: 32862, 7: 32863, 8: 32864, 9: 32865, 10: 32866, 11: 32867, 12: 32868, 14: 32869, 18: 32870, 24: 32871}
@@ -383,6 +383,16 @@ class MathMagicWindows:
             w.send_timeout(doc.main, w.WM_COMMAND, CMD["select_all"])
             w.send_timeout(doc.main, w.WM_COMMAND, cmd)
 
+    def apply_size(self, doc: Document, size_pt: float) -> None:
+        """Select all and post the size commands (FIFO; the next Save As is the ordered barrier). Re-applied on a
+        reopened native .mmf so the whole equation carries the requested size. Note (measured live): the height of
+        a wide hat / arc is a StyleSet spacing value (Over/Under templates > Embellishment height), not a function
+        of the point size - it stays ~2-3 pt; adjust the StyleSet for very large sizes."""
+        self.activate(doc)
+        for cmd in size_commands(size_pt):
+            w.post(doc.main, w.WM_COMMAND, CMD["select_all"], 0)
+            w.post(doc.main, w.WM_COMMAND, cmd, 0)
+
     def update_linked(self, doc: Document, timeout: float = 20.0, on_tick=None, acks: list | None = None) -> None:
         if not doc.linked:
             raise MathMagicError("NOT_LINKED", "Update requires an InDesign-linked MathMagic window")
@@ -455,6 +465,42 @@ class MathMagicWindows:
             raise MathMagicError("SAVE_TIMEOUT", "File was not written", dialogs=[d.as_dict() for d in self.dialogs()])
         return out
 
+    def open_file(self, main: int, path: str, timeout: float = 15.0, on_tick=None, acks: list | None = None) -> Document:
+        """File > Open by window messages (absolute path typed into the file-name field); returns the new window.
+        Used for MathMagic's native .mmf text files (e.g. wide hat / arc accents the TeX importer cannot build)."""
+        target = str(Path(path).resolve())
+        if not os.path.isfile(target):
+            raise MathMagicError("OPEN_FILE_NOT_FOUND", f"File not found: {target}")
+        before = {d.frame for d in self.documents(main)}
+
+        def cancel_file_dialogs():
+            for d in self.dialogs():
+                if d.kind == "save_as":
+                    w.post(d.hwnd, w.WM_COMMAND, IDCANCEL, 0)
+
+        w.post(main, w.WM_COMMAND, CMD["open"], 0)
+        dlg = self.wait_for(lambda: next((d for d in self.dialogs() if d.kind == "save_as"), None), 10.0, on_tick,
+                            acks=acks, allowed=("save_as",))
+        if not dlg:
+            raise MathMagicError("OPEN_DIALOG_TIMEOUT", "Open dialog did not appear")
+        name_edit = next((k for k in w.descendants(dlg.hwnd)
+                          if w.ctrl_id(k) == SAVE_NAME_FIELD and w.class_name(k) == "Edit"), 0)
+        if not name_edit:
+            cancel_file_dialogs()
+            raise MathMagicError("OPEN_FIELD_NOT_FOUND", "File name field not found in Open dialog")
+        w.set_text(name_edit, target)
+        w.post(dlg.hwnd, w.WM_COMMAND, IDOK, 0)
+        try:
+            doc = self.wait_for(lambda: next((d for d in self.documents(main) if d.frame not in before and d.view), None),
+                                timeout, on_tick, acks=acks, allowed=("save_as",))
+        except MathMagicError:
+            cancel_file_dialogs()
+            raise
+        if not doc:
+            cancel_file_dialogs()
+            raise MathMagicError("OPEN_TIMEOUT", "MathMagic did not open the file", dialogs=[d.as_dict() for d in self.dialogs()])
+        return doc
+
     def close_document(self, doc: Document, discard: bool = True, timeout: float = 5.0) -> bool:
         w.post(doc.frame, w.WM_CLOSE, 0, 0)
         end = time.monotonic() + timeout
@@ -517,7 +563,7 @@ class MathMagicWindows:
         return {"ok": True, "styleset": name, "steps": steps}
 
 
-USED_BY_MCP = {57600: "new work document", 57603: "save (untitled fallback)", 57604: "save as (render/export)",
+USED_BY_MCP = {57600: "new work document", 57601: "open native .mmf (wide hat / arc accents)", 57603: "save (untitled fallback)", 57604: "save as (render/export)",
                32881: "save a copy (linked)", 32880: "update to InDesign", 57642: "select all", 32825: "delete",
                32922: "convert TeX to equation", 32900: "StyleSet (set_style/apply_styleset)",
                **{cid: f"size {pt} pt" for pt, cid in SIZE_CMDS.items()}, SIZE_PLUS_01: "size +0.1 pt", SIZE_MINUS_01: "size -0.1 pt"}

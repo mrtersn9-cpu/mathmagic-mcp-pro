@@ -192,6 +192,9 @@ def test_latex_check():
     (r"\dfrac{12}{18}", r"\mbox{\Large $\frac{12}{18}$}", "EQUIVALENT"),        # live, soru bankasi E2E
     (r"\dfrac{12}{18}", r"\mbox{\Large $\frac{12}{17}$}", "DIFFERENT"),
     (r"\tbinom{n}{k}", r"\binom{n}{k}", "EQUIVALENT"),
+    # live 2026-11-17: degree sign on a multi-digit number, wide-hat placeholder with a \Huge size hint
+    (r"m(\overbrace{ABC})=60^{\circ}", r"{\mathrm{m}}{(}\mbox{\Huge $\overbrace{ABC}$}{)}{=}{60}^{\circ}", "EQUIVALENT"),
+    (r"60^{\circ}", r"{61}^{\circ}", "DIFFERENT"),
 ])
 def test_live_export_verdicts(typed, exported, verdict):
     assert latexcheck.compare(typed, "$" + exported + "$")["verdict"] == verdict
@@ -427,7 +430,7 @@ def test_stdio_dry_runs():
     p = subprocess.run([sys.executable, "-u", str(ROOT / "server_pro.py")], input="\n".join(map(json.dumps, reqs)) + "\n",
                        capture_output=True, text=True, timeout=60)
     msgs = [json.loads(x) for x in p.stdout.splitlines()]
-    assert msgs[0]["result"]["serverInfo"]["version"] == "0.4.1"
+    assert msgs[0]["result"]["serverInfo"]["version"] == "0.4.2"
     assert "Never use Windows MCP" in msgs[0]["result"]["instructions"]
     assert len(msgs[1]["result"]["tools"]) == 27
     created = json.loads(msgs[2]["result"]["content"][0]["text"])
@@ -478,3 +481,63 @@ def test_render_reports_empty_render_after_retry(tmp_path):
     p.wait_keys = lambda: {"waited_s": 0.0, "held": [], "released": True}
     r = p.render(r"\frac{1}{2}", str(tmp_path / "b.eps"), verify_latex=False)
     assert not r["ok"] and r["status"] == "EMPTY_RENDER" and r["empty_render_retries"] == 1
+
+
+# ---------------------------------------------------------------- native accents: wide hat / arc (live 2026-11-17)
+MMF_PLACEHOLDER = ("\\INFORMATION\r{\r}\r\\SETTING\r{\r}\r\\CONTENT\r{\r"
+                   "\\B{\\C(m)\\C(\\()\\T(46){\\B{\\C(DEF)}\\V[,,,,,,036,,,](15)}\\C(\\))}\r}\r")
+
+
+def test_native_accent_plan_and_swap():
+    assert latexcheck.native_accent_plan(r"x^2+1") is None
+    ph, syms = latexcheck.native_accent_plan(r"m(\widehat{DEF})=\overarc{AB}+\widehat{E}")
+    assert ph == r"m(\overbrace{DEF})=\overbrace{AB}+\overbrace{E}" and syms == [42, 19, 42]
+    assert latexcheck.native_accent_plan(r"\widehatx")is None            # not the command (letters follow)
+    with pytest.raises(latexcheck.NativeAccentError):
+        latexcheck.native_accent_plan(r"\widehat{A}+\overbrace{B}")
+    swapped = latexcheck.swap_native_symbols(MMF_PLACEHOLDER, [42])
+    assert "\\V(42)" in swapped and "(15)" not in swapped and "\\C(DEF)" in swapped
+    with pytest.raises(latexcheck.NativeAccentError):
+        latexcheck.swap_native_symbols(MMF_PLACEHOLDER, [42, 19])
+    # MathMagic exports the Wide Hat template as \widehat{\mathrm{DEF}} (live) -> equivalent to the typed LaTeX
+    assert latexcheck.compare(r"m(\widehat{DEF})", r"$\mathrm{m}(\widehat{\mathrm{DEF}})$")["verdict"] == "EQUIVALENT"
+
+
+class FakeNativeMM(FakeRenderMM):
+    def __init__(self):
+        super().__init__(empty_times=0)
+        self.opened = []
+
+    def save_as(self, doc, path, keyword, on_tick=None, acks=None):
+        self.ops.append(("save", keyword, doc.title))
+        if keyword == "MathMagic file":
+            Path(path).write_bytes(MMF_PLACEHOLDER.encode("mbcs"))
+        elif keyword == "LaTeX":
+            Path(path).write_text(r"$\mathrm{m}(\overbrace{\mathrm{DEF}})$", encoding="utf-8")
+        else:
+            Path(path).write_text(REAL_HEADER, encoding="latin-1")
+
+    def open_file(self, main, path, timeout=15.0, on_tick=None, acks=None):
+        self.opened.append(Path(path).read_bytes().decode("mbcs"))
+        return mmwin.Document(5, 6, Path(path).name, 3)
+
+    def close_document(self, doc, discard=True, timeout=5.0):
+        self.ops.append(("close", doc.title)); return True
+
+
+def test_render_native_wide_hat_route(tmp_path):
+    mm = FakeNativeMM()
+    p = make_pipeline(tmp_path, mm)
+    p.wait_keys = lambda: {"waited_s": 0.0, "held": [], "released": True}
+    r = p.render(r"m(\widehat{DEF})", str(tmp_path / "w.eps"), verify_latex=True)
+    assert r["ok"] and r["status"] == "RENDERED" and r["latex_check"]["verdict"] in ("EXACT", "EQUIVALENT")
+    assert r["native_accents"]["symbols"] == [42] and "\\V(42)" in mm.opened[0]
+    assert ("queue", r"m(\overbrace{DEF})") in mm.ops
+    assert mm.ops[-2][:2] == ("save", "MathMagic EPS") and mm.ops[-1][0] == "close"
+    assert mm.ops[-2][2].startswith("w-") and mm.ops[-2][2].endswith(".mmf") and not list((tmp_path).glob("*.mmf"))
+
+
+def test_render_native_rejects_placeholder_conflict(tmp_path):
+    p = make_pipeline(tmp_path, FakeNativeMM())
+    r = p.render(r"\widehat{A}+\overbrace{B}", str(tmp_path / "c.eps"))
+    assert not r["ok"] and r["status"] == "NATIVE_ACCENT_UNSUPPORTED"

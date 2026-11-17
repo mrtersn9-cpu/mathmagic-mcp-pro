@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mathmagic-mcp-pro"
-version = "0.4.1"
+version = "0.4.2"
 description = "MCP server that places native, editable MathMagic Pro 9.31 equations into Adobe InDesign 2026 in the background (window messages + InDesign COM; no keyboard, mouse or clipboard)"
 requires-python = ">=3.10"
 dependencies = []

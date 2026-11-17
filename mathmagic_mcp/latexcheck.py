@@ -24,8 +24,49 @@ IGNORED = {"left", "right", "displaystyle", "textstyle", "scriptstyle", "scripts
            "tiny", "scriptsize", "footnotesize", "small", "normalsize", "large", "Large", "LARGE", "huge", "Huge"}
 UNWRAP_1 = {"mathrm", "mathit", "mathnormal", "text", "textrm", "mathop", "mbox", "operatorname"}
 ARITY = {"frac": 2, "dfrac": 2, "tfrac": 2, "binom": 2, "sqrt": 1, "overline": 1, "underline": 1, "vec": 1, "hat": 1,
-         "bar": 1, "mathbf": 1, "boldsymbol": 1}
+         "bar": 1, "mathbf": 1, "boldsymbol": 1, "widehat": 1, "overbrace": 1}
 OPENERS = {")": "(", "]": "["}
+
+# ---------------------------------------------------------------- native accents (wide hat / arc)
+# MathMagic 9.31's TeX importer cannot build these: \widehat{DEF} silently loses its content (m(\widehat{DEF}) -> m()),
+# \wideparen becomes literal text, \overparen raises an error (verified live 2026-11-17). Its native .mmf text format
+# writes them as the Over template T(46) with a variable symbol: V(42) = Wide Hat, V(19) = Over Elliptical Arc,
+# V(15) = over brace (verified live). The MCP therefore types an \overbrace placeholder, verifies the structure,
+# saves the equation as .mmf, swaps V(15) for the wanted symbol and reopens the file in MathMagic.
+NATIVE_ACCENTS = {"widehat": 42, "overarc": 19, "wideparen": 19, "overparen": 19}
+NATIVE_PLACEHOLDER, NATIVE_PLACEHOLDER_SYMBOL = "overbrace", 15
+_NATIVE_RE = re.compile(r"\\(" + "|".join(sorted(NATIVE_ACCENTS, key=len, reverse=True)) + r")(?![A-Za-z])")
+_MMF_SYMBOL_RE = re.compile(r"\\V(?:\[[^\]]*\])?\(" + str(NATIVE_PLACEHOLDER_SYMBOL) + r"\)")
+
+
+class NativeAccentError(ValueError):
+    pass
+
+
+def native_accent_plan(latex: str) -> tuple[str, list[int]] | None:
+    """Return (placeholder LaTeX, [MathMagic symbol ids in reading order]) or None when no native accent is used."""
+    found = [m.group(1) for m in _NATIVE_RE.finditer(latex)]
+    if not found:
+        return None
+    if re.search(r"\\" + NATIVE_PLACEHOLDER + r"(?![A-Za-z])", latex):
+        raise NativeAccentError("\\overbrace cannot be combined with \\widehat/\\overarc in one equation "
+                                "(it is the placeholder for the native-accent route)")
+    placeholder = _NATIVE_RE.sub(lambda m: "\\" + NATIVE_PLACEHOLDER, latex)
+    return placeholder, [NATIVE_ACCENTS[name] for name in found]
+
+
+def swap_native_symbols(mmf_text: str, symbols: list[int]) -> str:
+    """Replace the placeholder symbols in a MathMagic .mmf text, in order, with the wanted variable symbols."""
+    matches = list(_MMF_SYMBOL_RE.finditer(mmf_text))
+    if len(matches) != len(symbols):
+        raise NativeAccentError(f"expected {len(symbols)} placeholder symbol(s) in the .mmf, found {len(matches)}")
+    out, last = [], 0
+    for m, sym in zip(matches, symbols):
+        out.append(mmf_text[last:m.start()])
+        out.append(f"\\V({sym})")
+        last = m.end()
+    out.append(mmf_text[last:])
+    return "".join(out)
 
 
 def extract_math(tex: str) -> str:
@@ -96,7 +137,8 @@ def fix_mathmagic_quirks(latex: str) -> tuple[str, list[str]]:
 
 
 # ---------------------------------------------------------------- structural comparison
-_TOKEN = re.compile(r"\\[A-Za-z]+|\\.|[{}\[\]^_]|\S")
+# Digit runs are one atom: MathMagic exports 60^{\circ} as {60}^{\circ} (live) and both typeset identically.
+_TOKEN = re.compile(r"\\[A-Za-z]+|\\.|[{}\[\]^_]|\d+|\S")
 
 
 class _Parser:

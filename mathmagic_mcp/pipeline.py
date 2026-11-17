@@ -20,6 +20,7 @@ import json
 import os
 import re
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -31,7 +32,7 @@ from . import mmwin
 from . import style as stylemod
 from . import win32util as w
 
-VERSION = "0.4.1"
+VERSION = "0.4.2"
 TOOL_TAG = "mathmagic-mcp-pro/" + VERSION
 _MARKER = re.compile(r"^\[\[MM:([A-Za-z0-9_-]{1,40})\]\]$")
 _ID = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -310,45 +311,88 @@ class Pipeline:
         if out.exists():
             out.unlink()
         t0 = time.monotonic(); focus = self.focus_factory(); acks: list = []; check = None; shot = None
-        keys: list = []; empty_retries = 0
+        keys: list = []; empty_retries = 0; native = None
         tex = out.with_suffix(".verify.tex")
+        try:
+            plan = latexcheck.native_accent_plan(latex)        # \widehat / \overarc: MathMagic's TeX import can't
+        except latexcheck.NativeAccentError as exc:
+            return self._result("NATIVE_ACCENT_UNSUPPORTED", False, t0, focus, error=str(exc))
+        typed = plan[0] if plan else latex
+        # native route: the placeholder .mmf gets a unique temp name (re-saving over a file that is open in MathMagic
+        # raises a "replace?" prompt - seen live) and is deleted after a successful export
+        stage = (Path(os.environ.get("TEMP", str(Path.home()))) / "MathMagicMCP" / "native" /
+                 f"{out.stem}-{uuid.uuid4().hex[:8]}.mmf") if plan else out
+        if plan:
+            stage.parent.mkdir(parents=True, exist_ok=True)
         try:
             main = self.mm.ensure_ready(prefer_linked=False, auto_launch=True)
             for attempt in (1, 2):
                 doc = self.mm.work_document(main, on_tick=focus.sample)
                 keys.append(self.wait_keys())
                 if fast:
-                    self.mm.queue_latex(doc, latex, size_pt)  # Save As below is the ordered barrier
+                    self.mm.queue_latex(doc, typed, size_pt)  # Save As below is the ordered barrier
                 else:
-                    self.mm.write_latex(doc, latex, True, size_pt)
-                self.mm.save_as(doc, str(out), keyword, on_tick=focus.sample, acks=acks)
+                    self.mm.write_latex(doc, typed, True, size_pt)
+                self.mm.save_as(doc, str(stage), "MathMagic file" if plan else keyword, on_tick=focus.sample, acks=acks)
                 check = None
                 if verify_latex:
                     if tex.exists():
                         tex.unlink()
                     self.mm.save_as(doc, str(tex), "LaTeX", on_tick=focus.sample, acks=acks)
-                    check = latexcheck.compare(latex, tex.read_text(encoding="utf-8", errors="replace"))
-                info = epsmod.inspect_eps(out) if out.suffix.lower() == ".eps" else {"size": out.stat().st_size}
-                # Empty equation: typed characters were lost (live E2E: user holding Alt for Alt+Tab). Retry once.
-                empty = (check is not None and not check.get("exported")) or (out.suffix.lower() == ".eps" and
-                                                                               info.get("is_mathmagic") and not info.get("fonts"))
+                    check = latexcheck.compare(typed, tex.read_text(encoding="utf-8", errors="replace"))
+                if plan:
+                    mmf_text = stage.read_bytes().decode("mbcs", errors="replace")
+                    info = {"size": stage.stat().st_size}
+                    # characters are \C(..) or, with size/style attributes, \C[..](..) (seen live with size_pt)
+                    empty = (check is not None and not check.get("exported")) or \
+                        not re.search(r"\\C(?:\[[^\]]*\])?\(", mmf_text.split("\\CONTENT", 1)[-1])
+                else:
+                    info = epsmod.inspect_eps(out) if out.suffix.lower() == ".eps" else {"size": out.stat().st_size}
+                    # Empty equation: typed characters were lost (live E2E: user holding Alt for Alt+Tab). Retry once.
+                    empty = (check is not None and not check.get("exported")) or (out.suffix.lower() == ".eps" and
+                                                                                   info.get("is_mathmagic") and not info.get("fonts"))
                 if not empty or attempt == 2:
                     break
                 empty_retries += 1
-                for f in (out, tex):
+                for f in (stage, tex):
                     if f.exists():
                         f.unlink()
-            if capture_png:
+            if plan and not empty and not (check and check["verdict"] == "DIFFERENT"):
+                # swap the placeholder symbols into a NEW file (the work document may still be bound to `stage`:
+                # MathMagic refuses to open it twice - "File aready opened!", seen live) and export from that file
+                swapped = stage.with_name(stage.stem + "-native.mmf")
+                swapped.write_bytes(latexcheck.swap_native_symbols(mmf_text, plan[1]).encode("mbcs"))
+                native_doc = self.mm.open_file(main, str(swapped), on_tick=focus.sample, acks=acks)
+                try:
+                    if size_pt is not None:
+                        self.mm.apply_size(native_doc, size_pt)   # Save As below is the ordered barrier
+                    self.mm.save_as(native_doc, str(out), keyword, on_tick=focus.sample, acks=acks)
+                    if capture_png:
+                        shot = w.capture_png(native_doc.frame, str(Path(capture_png).resolve()))
+                finally:
+                    self.mm.close_document(native_doc, discard=True)
+                info = epsmod.inspect_eps(out) if out.suffix.lower() == ".eps" else {"size": out.stat().st_size}
+                native = {"symbols": plan[1], "placeholder_latex": typed}
+                for f in (stage, swapped):
+                    try:
+                        f.unlink()
+                    except OSError:
+                        pass
+            elif plan:
+                info = {"size": 0}
+                native = {"symbols": plan[1], "placeholder_latex": typed, "mmf": str(stage), "skipped": True}
+            if capture_png and shot is None:
                 shot = w.capture_png(doc.frame, str(Path(capture_png).resolve()))
-            format_ok = mmwin.output_matches_format(str(out), keyword)
+            format_ok = out.exists() and mmwin.output_matches_format(str(out), keyword)
             ok = format_ok and ((info.get("is_mathmagic") and info.get("has_mmf_data")) if out.suffix.lower() == ".eps" else info["size"] > 0)
             if empty or (check and check["verdict"] == "DIFFERENT"):
                 ok = False
-            status = ("RENDERED" if ok else "FORMAT_MISMATCH" if not format_ok else "EMPTY_RENDER" if empty
+            status = ("RENDERED" if ok else "FORMAT_MISMATCH" if out.exists() and not format_ok else "EMPTY_RENDER" if empty
                       else "LATEX_MISMATCH" if check and check["verdict"] == "DIFFERENT" else "OUTPUT_NOT_VALID")
             held = [k for r in keys for k in r.get("held", [])]
             res = self._result(status, bool(ok), t0, focus, file=str(out), format=keyword, file_info=info,
                                latex_check=check, latex_rewrites=rewrites or None, acknowledged_dialogs=acks, capture=shot,
+                               native_accents=native,
                                empty_render_retries=empty_retries or None,
                                user_modifier_keys_waited=({"keys": sorted(set(held)),
                                                            "seconds": round(sum(r.get("waited_s", 0) for r in keys), 2)}

@@ -1,8 +1,24 @@
-# MathMagic MCP Pro v0.4.1 — Kullanım Kılavuzu
+# MathMagic MCP Pro v0.4.2 — Kullanım Kılavuzu
 
 **Giriş noktası:** `server_pro.py` (Claude kaydı `mathmagic-mcp-pro`, ortam değişkeni `MATHMAGIC_DEFAULT_MODE=offline`).
 
 **Komut envanteri:** [`MATHMAGIC_KOMUT_ENVANTERI_TR.md`](MATHMAGIC_KOMUT_ENVANTERI_TR.md). MathMagic'in 213 menü komutunun ve 13 eklenti eyleminin canlı sınıflandırması bu belgede.
+
+## v0.4.2 değişiklikleri (17.11.2026): geometri şapkası ve yay
+
+- **Yeni yazımlar:**
+  - `\widehat{..}` geniş üçgen şapka verir (MathMagic Wide Hat, `V(42)`).
+  - `\overarc{..}`, `\wideparen{..}` ve `\overparen{..}` yay verir (Over Elliptical Arc, `V(19)`).
+- **Neden?** MathMagic'in TeX dönüştürücüsü bu komutları kuramıyor:
+  - `\widehat` içeriği siliyor;
+  - `\wideparen` düz metin oluyor;
+  - `\overparen` hata veriyor.
+- **Nasıl?** Formül `\overbrace` yer tutucusuyla yazılır ve yapı doğrulanır. MathMagic `.mmf` biçiminde kaydedilir, yer tutucu simge `V(15)` hedef simgeyle değiştirilir. Dosya File > Open ile (yeni `open_file`, yalnız mesajlarla) açılır ve EPS'e aktarılır. Geçici `.mmf` dosyaları `%TEMP%\MathMagicMCP\native` altında oluşur ve başarıdan sonra silinir.
+- **Karşılaştırıcı:** Çok basamaklı sayılar tek birim sayılır (`60^{\circ}` = `{60}^{\circ}`); `\widehat` ve `\overbrace` tanınır.
+- **Canlı testte bulunan iki hata düzeltildi:**
+  - Aynı formülü yeniden üretirken açık `.mmf` dosyasının üzerine kaydetmek "replace?" penceresi açıyordu. Artık geçici dosya adları benzersiz.
+  - Doğrulama kapalıyken çalışma belgesine bağlı dosya ikinci kez açılamıyordu ("File already opened"). Artık değiştirilmiş içerik ayrı bir dosyaya yazılıyor.
+- **Ölçüm:** Şapka yüksekliği 12 pt'de 2,85 pt, 24 pt'de 2,22 pt ekliyor. Yükseklik StyleSet'teki "Embellishment height" değerine bağlı.
 
 ## v0.4.1 değişiklikleri (17.11.2026, soru bankası canlı E2E testinden)
 
